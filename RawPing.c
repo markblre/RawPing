@@ -1,5 +1,7 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <arpa/inet.h>
 #include <netinet/ip.h>
 #include <netinet/ip_icmp.h>
@@ -24,15 +26,16 @@ void display(char *buffer, int length) {
 }
 
 // Remplit l'en-tête IP avec les valeurs spécifiées
+// Note that the ip_off and ip_len fields are in host byte order. (man ip on macOS)
 void fill_ip_header(struct ip *ip_header, size_t payload_size, u_short id, u_char ttl, const char *src_ip, const char *dest_ip) {
     memset(ip_header, 0, sizeof(struct ip));
 
     ip_header->ip_hl = sizeof(struct ip) / 4;
     ip_header->ip_v = 4;
     ip_header->ip_tos = 0;
-    ip_header->ip_len = htons(sizeof(struct ip) + ICMP_ECHO_REQUEST_SIZE + payload_size);
+    ip_header->ip_len = sizeof(struct ip) + ICMP_ECHO_REQUEST_SIZE + payload_size;
     ip_header->ip_id = htons(id);
-    ip_header->ip_off = htons(0);
+    ip_header->ip_off = 0;
     ip_header->ip_ttl = ttl;
     ip_header->ip_p = IPPROTO_ICMP;
     ip_header->ip_sum = htons(0);
@@ -87,6 +90,46 @@ void update_ip_checksum(struct ip *ip_header) {
     ip_header->ip_sum = checksum((char *)ip_header, ip_header->ip_hl * 4);
 }
 
+int send_packet(char *packet, int packet_size, const char *dest_ip) {
+    int sock;
+    struct sockaddr_in dest_addr;
+
+    // Créer un socket brut
+    sock = socket(AF_INET, SOCK_RAW, IPPROTO_RAW);
+    if (sock < 0) {
+        perror("Socket error");
+        return -1;
+    }
+
+    // Configurer l'adresse de destination
+    dest_addr.sin_family = AF_INET;
+    dest_addr.sin_port = htons(0);  // Pas de port pour les paquets bruts
+    dest_addr.sin_addr.s_addr = inet_addr(dest_ip);  // Adresse IP de destination
+
+
+    // Désactiver l'ajout automatique d'entête IP par le noyau (important sur macOS)
+    int one = 1;
+    if (setsockopt(sock, IPPROTO_IP, IP_HDRINCL, &one, sizeof(one)) < 0) {
+        perror("setsockopt error");
+        close(sock);
+        return -1;
+    }
+    
+
+    // Envoyer le paquet
+    if (sendto(sock, packet, packet_size, 0, (struct sockaddr *)&dest_addr, sizeof(dest_addr)) < 0) {
+        perror("Send failed");
+        close(sock);
+        return -1;
+    }
+
+    printf("Paquet envoyé à %s\n", dest_ip);
+
+    // Fermer le socket
+    close(sock);
+    return 0;
+}
+
 int main() {
     // Définition des paramètres
     const char *src_ip = "192.168.0.1";
@@ -106,12 +149,13 @@ int main() {
     fill_icmp_header(&icmp_header, id_icmp, icmp_sequence);
 
     // Création du paquet
-    char packet[sizeof(struct ip) + ICMP_ECHO_REQUEST_SIZE + payload_size];
+    size_t packet_size = sizeof(struct ip) + ICMP_ECHO_REQUEST_SIZE + payload_size;
+    char packet[packet_size];
     memcpy(packet, &ip_header, sizeof(struct ip));
     memcpy(packet + sizeof(struct ip), &icmp_header, ICMP_ECHO_REQUEST_SIZE); // On copie uniquement la partie de l'en-tête ICMP utile pour un ECHO REQUEST
 
     // Affichage du contenu du buffer avant mise à jour des sommes de contrôle
-    display(packet, sizeof(packet));
+    // display(packet, sizeof(packet));
 
     // Mise à jour de la somme de contrôle ICMP
     update_icmp_checksum((struct icmp *)(packet + sizeof(struct ip)), payload_size);
@@ -120,7 +164,10 @@ int main() {
     update_ip_checksum((struct ip *)packet);
 
     // Affichage du contenu du buffer après mise à jour des sommes de contrôle
-    display(packet, sizeof(packet));
+    // display(packet, sizeof(packet));
+
+    // Envoi du paquet
+    send_packet(packet, packet_size, dest_ip);
     
     return 0;
 }
