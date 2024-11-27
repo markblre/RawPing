@@ -4,6 +4,8 @@
 #include <netinet/ip.h>
 #include <netinet/ip_icmp.h>
 
+#define ICMP_ECHO_REQUEST_SIZE 8
+
 void display(char *buffer, int length) {
     for (int i = 0; i < length; i+=2) {
         // Affiche deux octets à la fois, en hexadécimal
@@ -28,7 +30,7 @@ void fill_ip_header(struct ip *ip_header, size_t payload_size, u_short id, u_cha
     ip_header->ip_hl = sizeof(struct ip) / 4;
     ip_header->ip_v = 4;
     ip_header->ip_tos = 0;
-    ip_header->ip_len = htons(sizeof(struct ip) + payload_size);
+    ip_header->ip_len = htons(sizeof(struct ip) + ICMP_ECHO_REQUEST_SIZE + payload_size);
     ip_header->ip_id = htons(id);
     ip_header->ip_off = htons(0);
     ip_header->ip_ttl = ttl;
@@ -41,7 +43,7 @@ void fill_ip_header(struct ip *ip_header, size_t payload_size, u_short id, u_cha
 // Remplit l'en-tête ICMP avec les valeurs spécifiées
 void fill_icmp_header(struct icmp *icmp_header, u_short id, u_short sequence) {
     memset(icmp_header, 0, sizeof(struct icmp));
-    
+
     icmp_header->icmp_type = ICMP_ECHO;
     icmp_header->icmp_code = 0;
     icmp_header->icmp_cksum = htons(0);
@@ -49,6 +51,76 @@ void fill_icmp_header(struct icmp *icmp_header, u_short id, u_short sequence) {
     icmp_header->icmp_seq = htons(sequence);
 }
 
+short checksum(char *addr, int count) {
+    unsigned long sum = 0;
+    uint16_t *ptr = (uint16_t *)addr;
+
+    // Additionne les mots de 16 bits
+    while (count > 1) {
+        sum += *ptr++;
+        count -= 2;
+    }
+
+    // Traite l'octet restant pour les paquets de taille impaire
+    if (count > 0) {
+        sum += (*(unsigned char *)ptr) << 8;
+    }
+
+    // Réduit le dépassement
+    while (sum >> 16) {
+        sum = (sum & 0xFFFF) + (sum >> 16);
+    }
+
+    // Retourne l'inverse du résultat
+    return (short)~sum;
+}
+
+void update_icmp_checksum(struct icmp *icmp_header, size_t payload_size) {
+    // Taille totale de l'ICMP (en-tête + payload)
+    size_t icmp_total_size = ICMP_ECHO_REQUEST_SIZE + payload_size;
+
+    // Calcul de la somme de contrôle
+    icmp_header->icmp_cksum = checksum((char *)icmp_header, icmp_total_size);
+}
+
+void update_ip_checksum(struct ip *ip_header) {
+    ip_header->ip_sum = checksum((char *)ip_header, ip_header->ip_hl * 4);
+}
+
 int main() {
+    // Définition des paramètres
+    const char *src_ip = "192.168.0.1";
+    const char *dest_ip = "192.168.0.2";
+    size_t payload_size = 0;
+    u_short id_ip = 0x1234;
+    u_char ttl = 100;
+    u_short id_icmp = 0x5678;
+    u_short icmp_sequence = 1;
+
+    // Création de l'en-tête IP
+    struct ip ip_header;
+    fill_ip_header(&ip_header, payload_size, id_ip, ttl, src_ip, dest_ip);
+
+    // Création de l'en-tête ICMP
+    struct icmp icmp_header;
+    fill_icmp_header(&icmp_header, id_icmp, icmp_sequence);
+
+    // Création du paquet
+    char packet[sizeof(struct ip) + ICMP_ECHO_REQUEST_SIZE + payload_size];
+    memcpy(packet, &ip_header, sizeof(struct ip));
+    memcpy(packet + sizeof(struct ip), &icmp_header, ICMP_ECHO_REQUEST_SIZE); // On copie uniquement la partie de l'en-tête ICMP utile pour un ECHO REQUEST
+
+    // Affichage du contenu du buffer avant mise à jour des sommes de contrôle
+    display(packet, sizeof(packet));
+
+    // Mise à jour de la somme de contrôle ICMP
+    update_icmp_checksum((struct icmp *)(packet + sizeof(struct ip)), payload_size);
+
+    // Mise à jour de la somme de contrôle IP
+    update_ip_checksum((struct ip *)packet);
+
+    // Affichage du contenu du buffer après mise à jour des sommes de contrôle
+    display(packet, sizeof(packet));
+    
     return 0;
 }
