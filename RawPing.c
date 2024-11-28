@@ -130,6 +130,43 @@ int send_packet(char *packet, int packet_size, const char *dest_ip) {
     return 0;
 }
 
+void receive_packet(int packet_size) {
+    int sock;
+    char buffer[packet_size];
+    struct sockaddr_in from;
+    socklen_t from_len = sizeof(from);
+
+    // Création d'une socket brute pour le protocole ICMP
+    sock = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
+    if (sock < 0) {
+        perror("Socket error");
+        exit(EXIT_FAILURE);
+    }
+
+    // Boucle pour écouter les réponses ICMP
+    printf("En attente d'une réponse ICMP...\n");
+    while (1) {
+        // Réception des données
+        ssize_t bytes_received = recvfrom(sock, buffer, packet_size, 0, (struct sockaddr *)&from, &from_len);
+        if (bytes_received < 0) {
+            perror("recvfrom error");
+            close(sock);
+            exit(EXIT_FAILURE);
+        }
+
+        // Affichage de l'adresse de l'émetteur
+        printf("Paquet reçu de l'adresse %s\n", inet_ntoa(from.sin_addr));
+
+        // Affichage du contenu du paquet
+        display(buffer, bytes_received);
+
+        break;
+    }
+
+    // Fermeture de la socket
+    close(sock);
+}
+
 int main() {
     // Définition des paramètres
     const char *src_ip = "192.168.0.1";
@@ -168,6 +205,9 @@ int main() {
 
     // Envoi du paquet
     send_packet(packet, packet_size, dest_ip);
+
+    // Attente de la réponse ICMP
+    receive_packet(packet_size);
     
     return 0;
 }
